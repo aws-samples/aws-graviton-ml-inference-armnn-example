@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AWS resources for building an example ML inference container with ArmNN 
+
+Parameters:
+  CodeCommitRepositoryName:
+    Type: String
+    Description: CodeCommit repository name (must exist already)
+    MinLength: 1
+
+  ContainerImageName:
+    Type: String
+    Description: Container image name for ECR
+    MinLength: 1
+
+Resources:
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Asterisks are required"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudWatchLogsPolicy
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - "*"
+              - Sid: CodeCommitPolicy
+                Effect: Allow
+                Action:
+                  - "codecommit:GitPull"
+                Resource:
+                  - !Sub "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${CodeCommitRepositoryName}"
+              - Sid: ECRPolicy
+                Effect: Allow
+                Action:
+                  - ecr:PutImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:InitiateLayerUpload
+                Resource:
+                  - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECRRepository}"
+              - Sid: ECRAuthPolicy
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource:
+                  - "*"
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W32
+            reason: "No build output artifacts to encrypt"
+    Properties:
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: ARM_CONTAINER
+        Image: "aws/codebuild/amazonlinux2-aarch64-standard:2.0"
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ECR_REPO_NAME
+            Value: !Ref ECRRepository
+      Source:
+        BuildSpec: !Sub |
+            version: 0.2
+            phases:
+              build:
+                commands:
+                  - "echo 'Building container image with ArmNN'"
+                  - "docker build -t $ECR_REPO_NAME:${ContainerImageName} ."
+                  - "echo 'Pushing container image to ECR'"
+                  - "aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
+                  - "docker tag $ECR_REPO_NAME:${ContainerImageName} ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/$ECR_REPO_NAME:${ContainerImageName}"
+                  - "docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/$ECR_REPO_NAME:${ContainerImageName}"
+        Type: CODECOMMIT
+        Location: !Sub "https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${CodeCommitRepositoryName}"
+
+Outputs:
+  ECRRepo:
+    Description: Name of the ECR repository created
+    Value: !Ref ECRRepository
+    Export:
+      Name: ECRRepositoryName
+
+  ECRContainerImage:
+    Description: Name of the ECR container image
+    Value: !Ref ContainerImageName
+    Export:
+      Name: ContainerImageName

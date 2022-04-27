@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AWS resources for deploying a container image on Lambda
+
+Parameters:
+  LambdaMemorySize:
+    Type: Number
+    Description: Amount of memory needed by Lambda function
+    Default: 2048
+    MinValue: 128
+    MaxValue: 10240
+
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LambdaContainerImage:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC configuration not required
+          - id: W92
+            reason: Reserved concurrent executions not required
+    Properties: 
+      Architectures: 
+        - arm64
+      Code:
+        ImageUri: !Join [ "", [ !Ref AWS::AccountId, ".dkr.ecr.", !Ref AWS::Region, ".amazonaws.com/", !ImportValue ECRRepositoryName , ":", !ImportValue ContainerImageName ] ]
+      PackageType: Image
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 900
+      MemorySize: !Ref LambdaMemorySize
